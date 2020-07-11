@@ -1,8 +1,15 @@
 
 import ValidationError from '../error/validation_error';
-import { unbundle } from '../util/unbundle_jsonlint';
+import {unbundle} from '../util/unbundle_jsonlint';
 import validateObject from './validate_object';
 import validateEnum from './validate_enum';
+import validateExpression from './validate_expression';
+import validateString from './validate_string';
+import getType from '../util/get_type';
+
+const objectElementValidators = {
+    promoteId: validatePromoteId
+};
 
 export default function validateSource(options) {
     const value = options.value;
@@ -15,36 +22,49 @@ export default function validateSource(options) {
     }
 
     const type = unbundle(value.type);
-    let errors = [];
+    let errors;
 
     switch (type) {
     case 'vector':
     case 'raster':
     case 'raster-dem':
-        errors = errors.concat(validateObject({
+        errors = validateObject({
             key,
             value,
             valueSpec: styleSpec[`source_${type.replace('-', '_')}`],
             style: options.style,
-            styleSpec
-        }));
-        if ('url' in value) {
-            for (const prop in value) {
-                if (['type', 'url', 'tileSize'].indexOf(prop) < 0) {
-                    errors.push(new ValidationError(`${key}.${prop}`, value[prop], `a source with a "url" property may not include a "${prop}" property`));
-                }
-            }
-        }
+            styleSpec,
+            objectElementValidators
+        });
         return errors;
 
     case 'geojson':
-        return validateObject({
+        errors = validateObject({
             key,
             value,
             valueSpec: styleSpec.source_geojson,
             style,
-            styleSpec
+            styleSpec,
+            objectElementValidators
         });
+        if (value.cluster) {
+            for (const prop in value.clusterProperties) {
+                const [operator, mapExpr] = value.clusterProperties[prop];
+                const reduceExpr = typeof operator === 'string' ? [operator, ['accumulated'], ['get', prop]] : operator;
+
+                errors.push(...validateExpression({
+                    key: `${key}.${prop}.map`,
+                    value: mapExpr,
+                    expressionContext: 'cluster-map'
+                }));
+                errors.push(...validateExpression({
+                    key: `${key}.${prop}.reduce`,
+                    value: reduceExpr,
+                    expressionContext: 'cluster-reduce'
+                }));
+            }
+        }
+        return errors;
 
     case 'video':
         return validateObject({
@@ -65,8 +85,7 @@ export default function validateSource(options) {
         });
 
     case 'canvas':
-        errors.push(new ValidationError(key, null, `Please use runtime APIs to add canvas sources, rather than including them in stylesheets.`, 'source.canvas'));
-        return errors;
+        return [new ValidationError(key, null, `Please use runtime APIs to add canvas sources, rather than including them in stylesheets.`, 'source.canvas')];
 
     default:
         return validateEnum({
@@ -76,5 +95,17 @@ export default function validateSource(options) {
             style,
             styleSpec
         });
+    }
+}
+
+function validatePromoteId({key, value}) {
+    if (getType(value) === 'string') {
+        return validateString({key, value});
+    } else {
+        const errors = [];
+        for (const prop in value) {
+            errors.push(...validateString({key: `${key}.${prop}`, value: value[prop]}));
+        }
+        return errors;
     }
 }

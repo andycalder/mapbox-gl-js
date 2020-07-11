@@ -1,15 +1,16 @@
 // @flow
 
-import { getJSON } from '../util/ajax';
+import {getJSON} from '../util/ajax';
 
-import performance from '../util/performance';
-import rewind from 'geojson-rewind';
+import {RequestPerformance} from '../util/performance';
+import rewind from '@mapbox/geojson-rewind';
 import GeoJSONWrapper from './geojson_wrapper';
 import vtpbf from 'vt-pbf';
 import Supercluster from 'supercluster';
 import geojsonvt from 'geojson-vt';
 import assert from 'assert';
 import VectorTileWorkerSource from './vector_tile_worker_source';
+import {createExpression} from '../style-spec/expression';
 
 import type {
     WorkerTileParameters,
@@ -20,8 +21,8 @@ import type Actor from '../util/actor';
 import type StyleLayerIndex from '../style/style_layer_index';
 
 import type {LoadVectorDataCallback} from './vector_tile_worker_source';
-import type { RequestParameters, ResponseCallback } from '../util/ajax';
-import type { Callback } from '../types/callback';
+import type {RequestParameters, ResponseCallback} from '../util/ajax';
+import type {Callback} from '../types/callback';
 import type {GeoJSONFeature} from '@mapbox/geojson-types';
 
 export type LoadGeoJSONParameters = {
@@ -30,7 +31,8 @@ export type LoadGeoJSONParameters = {
     source: string,
     cluster: boolean,
     superclusterOptions?: Object,
-    geojsonVtOptions?: Object
+    geojsonVtOptions?: Object,
+    clusterProperties?: Object
 };
 
 export type LoadGeoJSON = (params: LoadGeoJSONParameters, callback: ResponseCallback<Object>) => void;
@@ -92,7 +94,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
     loadGeoJSON: LoadGeoJSON;
     _state: SourceState;
     _pendingCallback: Callback<{
-        resourceTiming?: {[string]: Array<PerformanceResourceTiming>},
+        resourceTiming?: {[_: string]: Array<PerformanceResourceTiming>},
         abandoned?: boolean }>;
     _pendingLoadDataParams: LoadGeoJSONParameters;
     _geoJSONIndex: GeoJSONIndex
@@ -101,9 +103,10 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
      * @param [loadGeoJSON] Optional method for custom loading/parsing of
      * GeoJSON based on parameters passed from the main-thread Source.
      * See {@link GeoJSONWorkerSource#loadGeoJSON}.
+     * @private
      */
-    constructor(actor: Actor, layerIndex: StyleLayerIndex, loadGeoJSON: ?LoadGeoJSON) {
-        super(actor, layerIndex, loadGeoJSONTile);
+    constructor(actor: Actor, layerIndex: StyleLayerIndex, availableImages: Array<string>, loadGeoJSON: ?LoadGeoJSON) {
+        super(actor, layerIndex, availableImages, loadGeoJSONTile);
         if (loadGeoJSON) {
             this.loadGeoJSON = loadGeoJSON;
         }
@@ -124,13 +127,14 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
      *
      * @param params
      * @param callback
+     * @private
      */
     loadData(params: LoadGeoJSONParameters, callback: Callback<{
-        resourceTiming?: {[string]: Array<PerformanceResourceTiming>},
+        resourceTiming?: {[_: string]: Array<PerformanceResourceTiming>},
         abandoned?: boolean }>) {
         if (this._pendingCallback) {
             // Tell the foreground the previous call has been abandoned
-            this._pendingCallback(null, { abandoned: true });
+            this._pendingCallback(null, {abandoned: true});
         }
         this._pendingCallback = callback;
         this._pendingLoadDataParams = params;
@@ -159,19 +163,19 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
         delete this._pendingLoadDataParams;
 
         const perf = (params && params.request && params.request.collectResourceTiming) ?
-            new performance.Performance(params.request) : false;
+            new RequestPerformance(params.request) : false;
 
         this.loadGeoJSON(params, (err: ?Error, data: ?Object) => {
             if (err || !data) {
                 return callback(err);
             } else if (typeof data !== 'object') {
-                return callback(new Error("Input data is not a valid GeoJSON object."));
+                return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
             } else {
                 rewind(data, true);
 
                 try {
                     this._geoJSONIndex = params.cluster ?
-                        new Supercluster(params.superclusterOptions).load(data.features) :
+                        new Supercluster(getSuperclusterOptions(params)).load(data.features) :
                         geojsonvt(data, params.geojsonVtOptions);
                 } catch (err) {
                     return callback(err);
@@ -231,6 +235,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
     *
     * @param params
     * @param params.uid The UID for this tile.
+    * @private
     */
     reloadTile(params: WorkerTileParameters, callback: WorkerTileCallback) {
         const loaded = this.loaded,
@@ -253,6 +258,7 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
      * @param params
      * @param [params.url] A URL to the remote GeoJSON data.
      * @param [params.data] Literal GeoJSON data. Must be provided if `params.url` is not.
+     * @private
      */
     loadGeoJSON(params: LoadGeoJSONParameters, callback: ResponseCallback<Object>) {
         // Because of same origin issues, urls must either include an explicit
@@ -265,32 +271,86 @@ class GeoJSONWorkerSource extends VectorTileWorkerSource {
             try {
                 return callback(null, JSON.parse(params.data));
             } catch (e) {
-                return callback(new Error("Input data is not a valid GeoJSON object."));
+                return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
             }
         } else {
-            return callback(new Error("Input data is not a valid GeoJSON object."));
+            return callback(new Error(`Input data given to '${params.source}' is not a valid GeoJSON object.`));
         }
     }
 
     removeSource(params: {source: string}, callback: Callback<mixed>) {
         if (this._pendingCallback) {
             // Don't leak callbacks
-            this._pendingCallback(null, { abandoned: true });
+            this._pendingCallback(null, {abandoned: true});
         }
         callback();
     }
 
     getClusterExpansionZoom(params: {clusterId: number}, callback: Callback<number>) {
-        callback(null, this._geoJSONIndex.getClusterExpansionZoom(params.clusterId));
+        try {
+            callback(null, this._geoJSONIndex.getClusterExpansionZoom(params.clusterId));
+        } catch (e) {
+            callback(e);
+        }
     }
 
     getClusterChildren(params: {clusterId: number}, callback: Callback<Array<GeoJSONFeature>>) {
-        callback(null, this._geoJSONIndex.getChildren(params.clusterId));
+        try {
+            callback(null, this._geoJSONIndex.getChildren(params.clusterId));
+        } catch (e) {
+            callback(e);
+        }
     }
 
     getClusterLeaves(params: {clusterId: number, limit: number, offset: number}, callback: Callback<Array<GeoJSONFeature>>) {
-        callback(null, this._geoJSONIndex.getLeaves(params.clusterId, params.limit, params.offset));
+        try {
+            callback(null, this._geoJSONIndex.getLeaves(params.clusterId, params.limit, params.offset));
+        } catch (e) {
+            callback(e);
+        }
     }
+}
+
+function getSuperclusterOptions({superclusterOptions, clusterProperties}) {
+    if (!clusterProperties || !superclusterOptions) return superclusterOptions;
+
+    const mapExpressions = {};
+    const reduceExpressions = {};
+    const globals = {accumulated: null, zoom: 0};
+    const feature = {properties: null};
+    const propertyNames = Object.keys(clusterProperties);
+
+    for (const key of propertyNames) {
+        const [operator, mapExpression] = clusterProperties[key];
+
+        const mapExpressionParsed = createExpression(mapExpression);
+        const reduceExpressionParsed = createExpression(
+            typeof operator === 'string' ? [operator, ['accumulated'], ['get', key]] : operator);
+
+        assert(mapExpressionParsed.result === 'success');
+        assert(reduceExpressionParsed.result === 'success');
+
+        mapExpressions[key] = mapExpressionParsed.value;
+        reduceExpressions[key] = reduceExpressionParsed.value;
+    }
+
+    superclusterOptions.map = (pointProperties) => {
+        feature.properties = pointProperties;
+        const properties = {};
+        for (const key of propertyNames) {
+            properties[key] = mapExpressions[key].evaluate(globals, feature);
+        }
+        return properties;
+    };
+    superclusterOptions.reduce = (accumulated, clusterProperties) => {
+        feature.properties = clusterProperties;
+        for (const key of propertyNames) {
+            globals.accumulated = accumulated[key];
+            accumulated[key] = reduceExpressions[key].evaluate(globals, feature);
+        }
+    };
+
+    return superclusterOptions;
 }
 
 export default GeoJSONWorkerSource;

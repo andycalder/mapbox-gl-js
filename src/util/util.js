@@ -7,6 +7,9 @@ import window from './window';
 
 import type {Callback} from '../types/callback';
 
+// Number.MAX_SAFE_INTEGER not available in IE
+export const MAX_SAFE_INTEGER = Math.pow(2, 53) - 1;
+
 /**
  * @module util
  * @private
@@ -210,6 +213,23 @@ export function uuid(): string {
 }
 
 /**
+ * Return whether a given value is a power of two
+ * @private
+ */
+export function isPowerOfTwo(value: number): boolean {
+    return (Math.log(value) / Math.LN2) % 1 === 0;
+}
+
+/**
+ * Return the next power of two, or the input value if already a power of two
+ * @private
+ */
+export function nextPowerOfTwo(value: number): number {
+    if (value <= 1) return 1;
+    return Math.pow(2, Math.ceil(Math.log(value) / Math.LN2));
+}
+
+/**
  * Validate a string to match UUID(v4) of the
  * form: xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx
  * @param str string to validate.
@@ -286,7 +306,7 @@ export function filterObject(input: Object, iterator: Function, context?: Object
 }
 
 import deepEqual from '../style-spec/util/deep_equal';
-export { deepEqual };
+export {deepEqual};
 
 /**
  * Deeply clones two objects.
@@ -409,6 +429,18 @@ export function sphericalToCartesian([r, azimuthal, polar]: [number, number, num
     };
 }
 
+/* global self, WorkerGlobalScope */
+/**
+ *  Retuns true if the when run in the web-worker context.
+ *
+ * @private
+ * @returns {boolean}
+ */
+export function isWorker(): boolean {
+    return typeof WorkerGlobalScope !== 'undefined' && typeof self !== 'undefined' &&
+           self instanceof WorkerGlobalScope;
+}
+
 /**
  * Parses data from 'Cache-Control' headers.
  *
@@ -437,6 +469,30 @@ export function parseCacheControl(cacheControl: string): Object {
     return header;
 }
 
+let _isSafari = null;
+
+/**
+ * Returns true when run in WebKit derived browsers.
+ * This is used as a workaround for a memory leak in Safari caused by using Transferable objects to
+ * transfer data between WebWorkers and the main thread.
+ * https://github.com/mapbox/mapbox-gl-js/issues/8771
+ *
+ * This should be removed once the underlying Safari issue is fixed.
+ *
+ * @private
+ * @param scope {WindowOrWorkerGlobalScope} Since this function is used both on the main thread and WebWorker context,
+ *      let the calling scope pass in the global scope object.
+ * @returns {boolean}
+ */
+export function isSafari(scope: any): boolean {
+    if (_isSafari == null) {
+        const userAgent = scope.navigator ? scope.navigator.userAgent : null;
+        _isSafari = !!scope.safari ||
+        !!(userAgent && (/\b(iPad|iPhone|iPod)\b/.test(userAgent) || (!!userAgent.match('Safari') && !userAgent.match('Chrome'))));
+    }
+    return _isSafari;
+}
+
 export function storageAvailable(type: string): boolean {
     try {
         const storage = window[type];
@@ -446,4 +502,23 @@ export function storageAvailable(type: string): boolean {
     } catch (e) {
         return false;
     }
+}
+
+// The following methods are from https://developer.mozilla.org/en-US/docs/Web/API/WindowBase64/Base64_encoding_and_decoding#The_Unicode_Problem
+//Unicode compliant base64 encoder for strings
+export function b64EncodeUnicode(str: string) {
+    return window.btoa(
+        encodeURIComponent(str).replace(/%([0-9A-F]{2})/g,
+            (match, p1) => {
+                return String.fromCharCode(Number('0x' + p1)); //eslint-disable-line
+            }
+        )
+    );
+}
+
+// Unicode compliant decoder for base64-encoded strings
+export function b64DecodeUnicode(str: string) {
+    return decodeURIComponent(window.atob(str).split('').map((c) => {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2); //eslint-disable-line
+    }).join(''));
 }

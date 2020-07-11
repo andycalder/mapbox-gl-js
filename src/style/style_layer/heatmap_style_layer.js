@@ -3,10 +3,10 @@
 import StyleLayer from '../style_layer';
 
 import HeatmapBucket from '../../data/bucket/heatmap_bucket';
-import { RGBAImage } from '../../util/image';
+import {RGBAImage} from '../../util/image';
 import properties from './heatmap_style_layer_properties';
-import renderColorRamp from '../../util/color_ramp';
-import { Transitionable, Transitioning, PossiblyEvaluated } from '../properties';
+import {renderColorRamp} from '../../util/color_ramp';
+import {Transitionable, Transitioning, PossiblyEvaluated} from '../properties';
 
 import type Texture from '../../render/texture';
 import type Framebuffer from '../../gl/framebuffer';
@@ -42,7 +42,11 @@ class HeatmapStyleLayer extends StyleLayer {
 
     _updateColorRamp() {
         const expression = this._transitionablePaint._values['heatmap-color'].value.expression;
-        this.colorRamp = renderColorRamp(expression, 'heatmapDensity');
+        this.colorRamp = renderColorRamp({
+            expression,
+            evaluationKey: 'heatmapDensity',
+            image: this.colorRamp
+        });
         this.colorRampTexture = null;
     }
 

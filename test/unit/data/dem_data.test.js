@@ -1,9 +1,12 @@
-import { test } from 'mapbox-gl-js-test';
+import {test} from '../../util/test';
 import DEMData from '../../../src/data/dem_data';
-import { RGBAImage } from '../../../src/util/image';
-import { serialize, deserialize } from '../../../src/util/web_worker_transfer';
+import {RGBAImage} from '../../../src/util/image';
+import {serialize, deserialize} from '../../../src/util/web_worker_transfer';
 
 function createMockImage(height, width) {
+    // RGBAImage passed to constructor has uniform 1px padding on all sides.
+    height += 2;
+    width += 2;
     const pixels = new Uint8Array(height * width * 4);
     for (let i = 0; i < pixels.length; i++) {
         pixels[i] = (i + 1) % 4 === 0 ? 1 : Math.floor(Math.random() * 256);
@@ -11,15 +14,12 @@ function createMockImage(height, width) {
     return new RGBAImage({height, width}, pixels);
 }
 
-
 test('DEMData', (t) => {
     t.test('constructor', (t) => {
         const dem = new DEMData(0, {width: 4, height: 4, data: new Uint8ClampedArray(4 * 4 * 4)});
         t.equal(dem.uid, 0);
-        t.equal(dem.dim, 4);
-        t.equal(dem.border, 2);
-        t.equal(dem.stride, 8);
-        t.true(dem.data instanceof Int32Array);
+        t.equal(dem.dim, 2);
+        t.equal(dem.stride, 4);
         t.end();
     });
 
@@ -44,7 +44,6 @@ test('DEMData', (t) => {
 
     t.end();
 });
-
 
 test('DEMData#backfillBorder', (t) => {
     const dem0 = new DEMData(0, createMockImage(4, 4));
@@ -128,7 +127,6 @@ test('DEMData#backfillBorder', (t) => {
         dem0.backfillBorder(dem1, 1, -1);
         t.true(dem0.get(4, -1) === dem1.get(0, 3), 'backfills neighbor -1, 1');
 
-
         t.end();
     });
 
@@ -141,9 +139,9 @@ test('DEMData#backfillBorder', (t) => {
             $name: 'DEMData',
             uid: 0,
             dim: 4,
-            border: 2,
-            stride: 8,
+            stride: 6,
             data: dem0.data,
+            encoding: 'mapbox'
         }, 'serializes DEM');
 
         const transferrables = [];
@@ -163,7 +161,6 @@ test('DEMData#backfillBorder', (t) => {
 
         t.end();
     });
-
 
     t.end();
 });
